@@ -1,7 +1,10 @@
 from http import HTTPStatus
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
+from sqlalchemy import select
 
+from fast_api.database import get_session
+from fast_api.models import User
 from fast_api.schemas import (
     Message,
     UserInDB,
@@ -26,17 +29,42 @@ async def root():
     response_model=UserPublic,
     tags=['user'],
 )
-def create_user(user: UserSchema):
-    user_with_id = UserInDB(id=len(database) + 1, **user.model_dump())
+def create_user(user: UserSchema, session=Depends(get_session)):
+    db_user = session.scalar(
+        select(User).where(
+            (User.username == user.username) | (User.email == user.email)
+        )
+    )
 
-    database.append(user_with_id)
+    if db_user:
+        if db_user.username == user.username:
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail=f'Username {user.username} already registered',
+            )
+        elif db_user.email == user.email:
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail=f'Email {user.email} already registered',
+            )
 
-    return user_with_id
+    db_user = User(
+        username=user.username, email=user.email, password=user.password
+    )
+
+    session.add(db_user)
+    session.commit()
+    session.refresh(db_user)
+
+    return db_user
 
 
 @app.get('/users/', response_model=UserList, tags=['user'])
-async def get_users():
-    return {'users': database}
+async def get_users(session=Depends(get_session)):
+    user = session.scalars(
+        select(User)
+    )
+    return {'users': user}
 
 
 @app.get('/users/{user_id}', response_model=UserPublic, tags=['user'])
